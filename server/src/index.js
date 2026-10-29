@@ -7,7 +7,7 @@ import { db } from './db.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const SECRET = process.env.JWT_SECRET || 'dev-only-change-me';
+const SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? (() => { throw new Error('JWT_SECRET must be set in production'); })() : 'dev-only-change-me');
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }));
 app.use(express.json({ limit: '1mb' }));
 const publicUser = u => ({ id:u.id, name:u.name, email:u.email, college:u.college || '' });
@@ -27,7 +27,7 @@ app.post('/api/auth/register', (req,res)=>{
   const user=db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid);
   const token=jwt.sign({id:user.id,email:user.email},SECRET,{expiresIn:'7d'});
   res.status(201).json({token,user:publicUser(user)});
- } catch(e) { res.status(409).json({error:'An account with this email already exists.'}); }
+ } catch { res.status(409).json({error:'An account with this email already exists.'}); }
 });
 app.post('/api/auth/login',(req,res)=>{
  const {email,password}=req.body || {};
@@ -66,22 +66,33 @@ app.post('/api/listings',auth,(req,res)=>{
  VALUES(?,?,?,?,?,?,?,?,?,?)`).run(req.user.id,title.trim(),author.trim(),subject.trim(),branch.trim().toUpperCase(),Number(semester),Number(price),condition,description.trim(),image_url.trim());
  res.status(201).json({listing:db.prepare(listingSelect+' WHERE l.id=?').get(info.lastInsertRowid)});
 });
-app.put('/api/listings/:id',auth,(req,res)=>{
- const id=Number(req.params.id), old=db.prepare('SELECT * FROM listings WHERE id=?').get(id);
- if(!old) return res.status(404).json({error:'Listing not found.'});
- if(old.user_id!==req.user.id) return res.status(403).json({error:'You can only edit your own listing.'});
- const b=req.body||{}; const vals=['title','author','subject','branch','semester','price','condition','description','image_url'].map(k=>b[k]??old[k]);
- db.prepare(`UPDATE listings SET title=?,author=?,subject=?,branch=?,semester=?,price=?,condition=?,description=?,image_url=? WHERE id=?`).run(...vals,id);
- res.json({listing:db.prepare(listingSelect+' WHERE l.id=?').get(id)});
+app.put('/api/listings/:id',auth,(req,res,next)=>{
+ try {
+  const id=Number(req.params.id), old=db.prepare('SELECT * FROM listings WHERE id=?').get(id);
+  if(!old) return res.status(404).json({error:'Listing not found.'});
+  if(old.user_id!==req.user.id) return res.status(403).json({error:'You can only edit your own listing.'});
+  const b=req.body||{}; const vals=['title','author','subject','branch','semester','price','condition','description','image_url'].map(k=>b[k]??old[k]);
+  db.prepare(`UPDATE listings SET title=?,author=?,subject=?,branch=?,semester=?,price=?,condition=?,description=?,image_url=? WHERE id=?`).run(...vals,id);
+  res.json({listing:db.prepare(listingSelect+' WHERE l.id=?').get(id)});
+ } catch(err) {
+  next(err);
+ }
 });
-app.delete('/api/listings/:id',auth,(req,res)=>{
- const old=db.prepare('SELECT * FROM listings WHERE id=?').get(Number(req.params.id));
- if(!old) return res.status(404).json({error:'Listing not found.'});
- if(old.user_id!==req.user.id) return res.status(403).json({error:'You can only delete your own listing.'});
- db.prepare('DELETE FROM messages WHERE listing_id=?').run(old.id);
- db.prepare('DELETE FROM requests WHERE listing_id=?').run(old.id);
- db.prepare('DELETE FROM listings WHERE id=?').run(old.id);
- res.json({ok:true});
+app.delete('/api/listings/:id',auth,(req,res,next)=>{
+ try {
+  const old=db.prepare('SELECT * FROM listings WHERE id=?').get(Number(req.params.id));
+  if(!old) return res.status(404).json({error:'Listing not found.'});
+  if(old.user_id!==req.user.id) return res.status(403).json({error:'You can only delete your own listing.'});
+  const deleteTx = db.transaction(() => {
+   db.prepare('DELETE FROM messages WHERE listing_id=?').run(old.id);
+   db.prepare('DELETE FROM requests WHERE listing_id=?').run(old.id);
+   db.prepare('DELETE FROM listings WHERE id=?').run(old.id);
+  });
+  deleteTx();
+  res.json({ok:true});
+ } catch(err) {
+  next(err);
+ }
 });
 app.post('/api/requests',auth,(req,res)=>{
  const {listing_id,message=''}=req.body||{};
@@ -133,5 +144,5 @@ app.post('/api/messages/:listingId',auth,(req,res)=>{
  const info=db.prepare('INSERT INTO messages(listing_id,sender_id,receiver_id,body) VALUES(?,?,?,?)').run(l.id,req.user.id,receiver,body);
  res.status(201).json({message:db.prepare('SELECT m.*,u.name AS sender_name FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?').get(info.lastInsertRowid)});
 });
-app.use((err,req,res,next)=>{ console.error(err); res.status(500).json({error:'Unexpected server error.'}); });
+app.use((err,req,res,_next)=>{ console.error(err); res.status(500).json({error:'Unexpected server error.'}); });
 app.listen(PORT,()=>console.log(`CampusBooks API listening on http://localhost:${PORT}`));

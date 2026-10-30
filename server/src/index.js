@@ -8,7 +8,7 @@ import { db } from './db.js';
 const app = express();
 const PORT = process.env.PORT || 4000;
 const SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? (() => { throw new Error('JWT_SECRET must be set in production'); })() : 'dev-only-change-me');
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }));
+app.use(cors({ origin: [process.env.CLIENT_ORIGIN || 'http://localhost:5173', 'http://localhost:5173', 'http://localhost:5174'] }));
 app.use(express.json({ limit: '1mb' }));
 const publicUser = u => ({ id:u.id, name:u.name, email:u.email, college:u.college || '' });
 function auth(req,res,next) {
@@ -145,4 +145,7 @@ app.post('/api/messages/:listingId',auth,(req,res)=>{
  res.status(201).json({message:db.prepare('SELECT m.*,u.name AS sender_name FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?').get(info.lastInsertRowid)});
 });
 app.use((err,req,res,_next)=>{ console.error(err); res.status(500).json({error:'Unexpected server error.'}); });
-app.listen(PORT,()=>console.log(`CampusBooks API listening on http://localhost:${PORT}`));
+export { app };
+if (process.env.NODE_ENV !== 'test') {
+ app.listen(PORT,()=>console.log(`CampusBooks API listening on http://localhost:${PORT}`));
+}
